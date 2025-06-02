@@ -12,6 +12,7 @@ from passlib.context import CryptContext
 import jwt
 from jwt.exceptions import InvalidTokenError
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 
 
@@ -73,10 +74,11 @@ class UserResponse(BaseModel):
     id: int
     username: str
     email: str
-    full_name: str | None = None
-    disabled: bool | None = None
+    full_name: Optional[str]
+    disabled: Optional[bool]
+    
     class Config:
-        from_attributes = True
+        from_attributes = True  # Позволяет автоматически создавать Pydanctic объекты из ORM
 
 
 class UserInDB(UserResponse):
@@ -127,7 +129,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Se
     user = get_user(username=token_data.username, db=db)
     if user is None:
         raise credentials_exception
-    return user
+    return UserResponse.from_orm(user)  # Преобразуем ORM-объект в Pydanctic
 
 
 
@@ -197,11 +199,11 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
 # блок маршрутов
 # Маршрут для получения пользователя по ID
 @app.get("/users/", response_model=list[UserResponse])
-def get_users(db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    if not users:
-        raise HTTPException(status_code=404, detail="Users not found")
-    return users
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 
@@ -224,6 +226,7 @@ def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
     if user_update.username:
         user.username = user_update.username
     if user_update.email:
@@ -231,9 +234,10 @@ def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get
     if user_update.full_name:
         user.full_name = user_update.full_name
     if user_update.password:
-        user.hashed_password = fake_hash_password(user_update.password)
+        user.hashed_password = hash_password(user_update.password)
     if user_update.disabled is not None:
         user.disabled = user_update.disabled
+
     try:
         db.commit()
         db.refresh(user)
@@ -244,7 +248,7 @@ def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get
 
 # блок маршрутов
 @app.get("/users/me", response_model=UserResponse)
-async def read_users_me(current_user: Annotated[User, Depends(get_current_active_user)]):
+async def read_users_me(current_user: Annotated[UserResponse, Depends(get_current_active_user)]):
     return current_user
 
 
